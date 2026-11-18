@@ -38,6 +38,9 @@ pub struct Character {
     pub unlink_requested: bool,
     /// The login granted the scope to read access lists.
     pub reads_access_lists: bool,
+    /// Added by an admin without an EVE login. The others set it blue, but
+    /// the bot cannot touch its contacts. Stored as an empty refresh token.
+    pub manual: bool,
 }
 
 /// Where the bot was set up with `/setup`.
@@ -57,11 +60,13 @@ pub struct TrackedList {
 impl Character {
     fn from_row(row: &SqliteRow) -> Result<Self> {
         let discord_user_id: i64 = row.try_get("discord_user_id")?;
+        let refresh_token: String = row.try_get("refresh_token")?;
         Ok(Self {
             character_id: row.try_get("character_id")?,
             name: row.try_get("name")?,
             discord_user_id: UserId::new(discord_user_id.cast_unsigned()),
-            refresh_token: row.try_get("refresh_token")?,
+            manual: refresh_token.is_empty(),
+            refresh_token,
             unlink_requested: row.try_get("unlink_requested")?,
             reads_access_lists: row.try_get("reads_access_lists")?,
         })
@@ -169,6 +174,27 @@ impl Store {
     /// Forgets the status message, so the next update posts a new one.
     pub async fn clear_status_message(&self) -> Result<()> {
         self.set_setting("status_message_id", "0").await
+    }
+
+    /// Adds a character without an EVE login. Returns false if the character
+    /// is already linked.
+    pub async fn add_manual_character(
+        &self,
+        character_id: i64,
+        name: &str,
+        owner: UserId,
+    ) -> Result<bool> {
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO characters
+                 (character_id, name, discord_user_id, refresh_token)
+             VALUES (?, ?, ?, '')",
+        )
+        .bind(character_id)
+        .bind(name)
+        .bind(owner.get().cast_signed())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
     }
 
     pub async fn tracked_list(&self) -> Result<Option<TrackedList>> {

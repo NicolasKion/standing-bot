@@ -20,7 +20,7 @@ use tracing::{error, info, warn};
 use crate::access::Report;
 use crate::app::{App, LoginScopes};
 use crate::status::{self, truncate};
-use crate::store::{Home, TrackedList};
+use crate::store::{Character, Home, TrackedList};
 
 /// Discord returns at most this many members per request.
 const MEMBER_PAGE: u64 = 1000;
@@ -100,12 +100,13 @@ impl Handler {
             ));
         };
         // Admin commands work in any channel of the server.
-        if matches!(name, "whois" | "kick") {
+        if matches!(name, "whois" | "kick" | "add") {
             if command.guild_id != Some(home.guild_id) || !may_manage(command) {
                 return Ok(reply.content("Only members who can manage the server can run this."));
             }
             return match name {
                 "whois" => self.whois(command).await,
+                "add" => self.add_manual(command).await,
                 _ => self.kick(command).await,
             };
         }
@@ -270,12 +271,45 @@ impl Handler {
         if characters.is_empty() {
             return Ok(reply.content(format!("<@{user}> has no characters linked.")));
         }
-        let names: Vec<String> = characters.iter().map(|c| format!("- {}", c.name)).collect();
+        let names: Vec<String> = characters
+            .iter()
+            .map(|c| format!("- {}{}", c.name, note(c)))
+            .collect();
         Ok(reply.content(truncate(format!(
             "<@{user}> has {} characters linked:\n{}",
             characters.len(),
             names.join("\n")
         ))))
+    }
+
+    /// Adds a character for a member who cannot log in with it. The others set
+    /// it blue; its own contacts stay untouched.
+    async fn add_manual(&self, command: &CommandInteraction) -> Result<EditInteractionResponse> {
+        let reply = EditInteractionResponse::new();
+        let user = option(command, "user").and_then(|value| value.as_user_id());
+        let name = option(command, "character").and_then(CommandDataOptionValue::as_str);
+        let (Some(user), Some(name)) = (user, name) else {
+            return Ok(reply.content("Give me the user and the character name."));
+        };
+
+        let Some((character_id, name)) = self.app.esi.character_by_name(name.trim()).await? else {
+            return Ok(reply.content(format!(
+                "EVE knows no character named {name}. The name has to match exactly."
+            )));
+        };
+        if !self
+            .app
+            .store
+            .add_manual_character(character_id, &name, user)
+            .await?
+        {
+            return Ok(reply.content(format!("{name} is already linked.")));
+        }
+        self.app.sync.notify_one();
+        info!("{} added {name} by hand for {user}", command.user.id);
+        Ok(reply.content(format!(
+            "Added {name} for <@{user}>. Everyone in the network sets it blue. I cannot set contacts on {name} itself, so its owner has to set the others blue by hand. A normal login later replaces this."
+        )))
     }
 
     /// Removes one character, or all characters of a user, from the network.
@@ -444,14 +478,7 @@ impl Handler {
         }
         let names: Vec<String> = characters
             .iter()
-            .map(|c| {
-                let note = if c.reads_access_lists {
-                    " (reads access lists)"
-                } else {
-                    ""
-                };
-                format!("- {}{note}", c.name)
-            })
+            .map(|c| format!("- {}{}", c.name, note(c)))
             .collect();
         Ok(truncate(format!("Your characters:\n{}", names.join("\n"))))
     }
@@ -526,6 +553,17 @@ impl Handler {
         Ok(reply.content(format!(
             "Tracking the access list {name} now. `/standings access` shows who is missing in a moment."
         )))
+    }
+}
+
+/// What is special about a character, for listings.
+fn note(character: &Character) -> &'static str {
+    if character.manual {
+        " (added by hand, sets no standings itself)"
+    } else if character.reads_access_lists {
+        " (reads access lists)"
+    } else {
+        ""
     }
 }
 
@@ -641,6 +679,21 @@ impl EventHandler for Handler {
                     )
                     .add_sub_option(user("The Discord user"))
                     .add_sub_option(character("Any character of the user")),
+                )
+                .add_option(
+                    sub(
+                        "add",
+                        "Add a character by name for a member who cannot log in with it",
+                    )
+                    .add_sub_option(user("The Discord user it belongs to").required(true))
+                    .add_sub_option(
+                        CreateCommandOption::new(
+                            CommandOptionType::String,
+                            "character",
+                            "Exact name of the character",
+                        )
+                        .required(true),
+                    ),
                 )
                 .add_option(
                     sub(

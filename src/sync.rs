@@ -273,6 +273,11 @@ impl Syncer {
         let store = &self.app.store;
         let standing = self.app.config.standing;
 
+        // Without a login there is no way to read or write its contacts.
+        if character.manual {
+            return Ok(());
+        }
+
         let managed = store.managed_contacts(id).await?;
         if desired.is_empty() && managed.is_empty() {
             return Ok(());

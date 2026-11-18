@@ -59,6 +59,12 @@ struct Name {
 }
 
 #[derive(Deserialize)]
+struct Ids {
+    #[serde(default)]
+    characters: Vec<Name>,
+}
+
+#[derive(Deserialize)]
 struct AccessListListing {
     #[serde(default)]
     access_lists: Vec<AccessListId>,
@@ -192,6 +198,18 @@ impl Esi {
             names.extend(batch.into_iter().map(|entry| (entry.id, entry.name)));
         }
         Ok(names)
+    }
+
+    /// Finds a character by its exact name and returns its id and the name
+    /// as EVE spells it. Public, needs no token.
+    pub async fn character_by_name(&self, name: &str) -> Result<Option<(i64, String)>, EsiError> {
+        let request = self.request(Method::POST, "/universe/ids").json(&[name]);
+        let ids: Ids = send(request).await?.json().await?;
+        Ok(ids
+            .characters
+            .into_iter()
+            .next()
+            .map(|found| (found.id, found.name)))
     }
 
     async fn write_contacts(
