@@ -1,8 +1,8 @@
 //! The Discord side: slash commands and who counts as a channel member.
 
-use std::collections::{BTreeMap, HashSet};
+use std::collections::HashSet;
 use std::sync::Arc;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, UNIX_EPOCH};
 
 use anyhow::{Context as _, Result};
 use serenity::all::{
@@ -27,8 +27,8 @@ const MEMBER_PAGE: u64 = 1000;
 /// Discord shows at most this many autocomplete choices.
 const MAX_CHOICES: usize = 25;
 
-/// How many access lists of one character `/standings access-list` looks at.
-const MAX_LISTS_PER_CHARACTER: usize = 25;
+/// Discord drops an autocomplete reply after three seconds.
+const AUTOCOMPLETE_WAIT: Duration = Duration::from_millis(2500);
 
 /// Everyone who can see the channel, bots excluded.
 ///
@@ -137,7 +137,7 @@ impl Handler {
                     Vec::new()
                 }
             },
-            "access-list" => self.app.list_names(user),
+            "access-list" => self.list_names(user).await,
             "whois" | "kick" if may_manage(command) => match self.app.store.characters().await {
                 Ok(characters) => characters.into_iter().map(|c| c.name).collect(),
                 Err(error) => {
@@ -160,6 +160,26 @@ impl Handler {
         let response = CreateInteractionResponse::Autocomplete(response);
         if let Err(error) = command.create_response(http, response).await {
             warn!("could not answer autocomplete: {error}");
+        }
+    }
+
+    /// Access list names for autocomplete. Without a cached answer this asks
+    /// ESI and waits only as long as Discord gives an autocomplete reply; the
+    /// lookup keeps running, so the next keystroke finds the names.
+    async fn list_names(&self, user: UserId) -> Vec<String> {
+        let cached = self.app.list_names(user);
+        if !cached.is_empty() {
+            return cached;
+        }
+        let app = Arc::clone(&self.app);
+        let lookup = tokio::spawn(async move { app.managed_lists(user).await });
+        match tokio::time::timeout(AUTOCOMPLETE_WAIT, lookup).await {
+            Ok(Ok(Ok(lists))) => lists.into_values().collect(),
+            Ok(Ok(Err(error))) => {
+                warn!("could not load access lists for autocomplete: {error:#}");
+                Vec::new()
+            }
+            _ => Vec::new(),
         }
     }
 
@@ -365,44 +385,12 @@ impl Handler {
             ));
         }
 
-        // Keyed by id so a list two characters manage shows up once.
-        let mut lists: BTreeMap<i64, String> = BTreeMap::new();
-        for reader in &readers {
-            let id = reader.character_id;
-            let token = match self.app.access_token(reader).await {
-                Ok(token) => token,
-                Err(error) => {
-                    warn!("no token for {}: {error}", reader.name);
-                    continue;
-                }
-            };
-            let ids = match self.app.esi.access_list_ids(id, &token).await {
-                Ok(ids) => ids,
-                Err(error) => {
-                    warn!("could not list access lists of {}: {error}", reader.name);
-                    continue;
-                }
-            };
-            for list_id in ids.into_iter().take(MAX_LISTS_PER_CHARACTER) {
-                if lists.contains_key(&list_id) {
-                    continue;
-                }
-                match self.app.esi.access_list(id, &token, list_id).await {
-                    Ok(list) => {
-                        lists.insert(list.id, list.name);
-                    }
-                    Err(error) => warn!("could not read access list {list_id}: {error}"),
-                }
-            }
-        }
+        let lists = self.app.managed_lists(command.user.id).await?;
         if lists.is_empty() {
             return Ok(
                 reply.content("I found no access list your characters are manager or admin of.")
             );
         }
-
-        self.app
-            .set_list_names(command.user.id, lists.values().cloned().collect());
 
         let Some(wanted) = option(command, "name").and_then(CommandDataOptionValue::as_str) else {
             let names: Vec<String> = lists.values().map(|name| format!("- {name}")).collect();

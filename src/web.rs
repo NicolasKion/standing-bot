@@ -52,7 +52,7 @@ async fn callback(
 }
 
 /// Finishes a login and returns the name of the linked character.
-async fn link_character(app: &App, params: &Callback) -> Result<String> {
+async fn link_character(app: &Arc<App>, params: &Callback) -> Result<String> {
     let user = app
         .finish_login(&params.state)
         .context("this login link is expired or was already used")?;
@@ -78,6 +78,15 @@ async fn link_character(app: &App, params: &Callback) -> Result<String> {
         )
         .await?;
     app.sync.notify_one();
+    if access_lists == AccessLists::Readable {
+        // Fetch the lists now so `/standings access-list` can suggest them.
+        let app = Arc::clone(app);
+        tokio::spawn(async move {
+            if let Err(error) = app.managed_lists(user).await {
+                warn!("could not load access lists after login: {error:#}");
+            }
+        });
+    }
     info!("linked {} to Discord user {user}", identity.name);
     Ok(identity.name)
 }

@@ -1,17 +1,21 @@
 //! State shared by the Discord bot, the web server and the sync task.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
 use serenity::model::id::UserId;
 use tokio::sync::Notify;
+use tracing::warn;
 
 use crate::access::Report;
 use crate::config::Config;
 use crate::esi::Esi;
 use crate::sso::{RefreshError, Sso};
 use crate::store::{Character, Home, Store};
+
+/// How many access lists of one character are looked at.
+const MAX_LISTS_PER_CHARACTER: usize = 25;
 
 /// How long a login link from `/standings auth` stays usable.
 const LOGIN_TTL: Duration = Duration::from_secs(15 * 60);
@@ -59,8 +63,48 @@ impl App {
         *self.home.lock().expect("home lock poisoned") = Some(home);
     }
 
-    /// Access list names the user's characters manage, as of their last
-    /// `/standings access-list` run.
+    /// Asks ESI for the access lists the user's characters are manager or
+    /// admin of, as id and name, and remembers the names for autocomplete.
+    pub async fn managed_lists(&self, user: UserId) -> anyhow::Result<BTreeMap<i64, String>> {
+        // Keyed by id so a list two characters manage shows up once.
+        let mut lists = BTreeMap::new();
+        let characters = self.store.characters_of(user).await?;
+        for reader in characters.iter().filter(|c| c.reads_access_lists) {
+            let id = reader.character_id;
+            let token = match self.access_token(reader).await {
+                Ok(token) => token,
+                Err(error) => {
+                    warn!("no token for {}: {error}", reader.name);
+                    continue;
+                }
+            };
+            let ids = match self.esi.access_list_ids(id, &token).await {
+                Ok(ids) => ids,
+                Err(error) => {
+                    warn!("could not list access lists of {}: {error}", reader.name);
+                    continue;
+                }
+            };
+            for list_id in ids.into_iter().take(MAX_LISTS_PER_CHARACTER) {
+                if lists.contains_key(&list_id) {
+                    continue;
+                }
+                match self.esi.access_list(id, &token, list_id).await {
+                    Ok(list) => {
+                        lists.insert(list.id, list.name);
+                    }
+                    Err(error) => warn!("could not read access list {list_id}: {error}"),
+                }
+            }
+        }
+        self.list_names
+            .lock()
+            .expect("list names lock poisoned")
+            .insert(user, lists.values().cloned().collect());
+        Ok(lists)
+    }
+
+    /// Access list names from the user's last lookup.
     pub fn list_names(&self, user: UserId) -> Vec<String> {
         self.list_names
             .lock()
@@ -68,13 +112,6 @@ impl App {
             .get(&user)
             .cloned()
             .unwrap_or_default()
-    }
-
-    pub fn set_list_names(&self, user: UserId, names: Vec<String>) {
-        self.list_names
-            .lock()
-            .expect("list names lock poisoned")
-            .insert(user, names);
     }
 
     /// Starts a login for a Discord user and returns the OAuth `state` for it.
