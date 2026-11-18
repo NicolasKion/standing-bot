@@ -17,7 +17,7 @@ use crate::store::{Character, Home, Store};
 /// How many access lists of one character are looked at.
 const MAX_LISTS_PER_CHARACTER: usize = 25;
 
-/// How long a login link from `/standings auth` stays usable.
+/// How long a login link stays usable after it was last used.
 const LOGIN_TTL: Duration = Duration::from_secs(15 * 60);
 
 /// What a login asks the player to grant.

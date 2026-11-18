@@ -4,13 +4,18 @@ use std::collections::BTreeMap;
 
 use anyhow::{Context, Result};
 use serenity::all::{
-    CreateAllowedMentions, CreateMessage, EditMessage, Http, HttpError, MessageId, StatusCode,
-    UserId,
+    ButtonStyle, CreateActionRow, CreateAllowedMentions, CreateButton, CreateMessage, EditMessage,
+    Http, HttpError, MessageId, StatusCode, UserId,
 };
 use tracing::warn;
 
 use crate::access::{Outcome, Report};
 use crate::app::App;
+
+/// Ids of the buttons under the status message.
+pub const ADD_BUTTON: &str = "standings:add";
+pub const MINE_BUTTON: &str = "standings:mine";
+pub const REMOVE_BUTTON: &str = "standings:remove";
 
 /// Discord takes 2000 characters per message. This leaves room for the cut mark.
 const MESSAGE_LIMIT: usize = 1900;
@@ -25,7 +30,7 @@ pub struct Summary {
 /// The full text of the pinned message.
 pub fn render(summary: Summary, report: Option<&Report>) -> String {
     truncate(format!(
-        "**Standings network**\n{} characters of {} members set each other to blue. Add yours with `/standings auth`, list them with `/standings characters`.\n\n{}",
+        "**Standings network**\n{} characters of {} members set each other to blue. Use the buttons below to add or remove yours.\n\n{}",
         summary.characters,
         summary.members,
         access_section(report)
@@ -85,7 +90,7 @@ pub async fn publish(app: &App, http: &Http, text: &str) -> Result<()> {
     let channel = home.channel_id;
 
     if let Some(id) = app.store.status_message().await? {
-        let edit = EditMessage::new().content(text);
+        let edit = EditMessage::new().content(text).components(buttons());
         match channel.edit_message(http, MessageId::new(id), edit).await {
             Ok(_) => return Ok(()),
             Err(error) if is_not_found(&error) => {}
@@ -95,6 +100,7 @@ pub async fn publish(app: &App, http: &Http, text: &str) -> Result<()> {
 
     let message = CreateMessage::new()
         .content(text)
+        .components(buttons())
         .allowed_mentions(CreateAllowedMentions::new());
     let message = channel
         .send_message(http, message)
@@ -105,6 +111,22 @@ pub async fn publish(app: &App, http: &Http, text: &str) -> Result<()> {
         warn!("could not pin the status message: {error}");
     }
     Ok(())
+}
+
+/// The buttons for the everyday actions, which also work when the channel is
+/// read-only and slash commands cannot be typed there.
+fn buttons() -> Vec<CreateActionRow> {
+    vec![CreateActionRow::Buttons(vec![
+        CreateButton::new(ADD_BUTTON)
+            .label("Add character")
+            .style(ButtonStyle::Primary),
+        CreateButton::new(MINE_BUTTON)
+            .label("My characters")
+            .style(ButtonStyle::Secondary),
+        CreateButton::new(REMOVE_BUTTON)
+            .label("Remove character")
+            .style(ButtonStyle::Secondary),
+    ])]
 }
 
 fn is_not_found(error: &serenity::Error) -> bool {

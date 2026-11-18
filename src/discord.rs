@@ -7,10 +7,12 @@ use std::time::{Duration, UNIX_EPOCH};
 use anyhow::{Context as _, Result};
 use serenity::all::{
     Channel, ChannelId, Command, CommandDataOption, CommandDataOptionValue, CommandInteraction,
-    CommandOptionType, Context, CreateActionRow, CreateAutocompleteResponse, CreateButton,
-    CreateCommand, CreateCommandOption, CreateInteractionResponse, EditInteractionResponse,
-    EventHandler, GuildChannel, GuildId, GuildMemberUpdateEvent, Http, Interaction, Member,
-    PermissionOverwrite, PermissionOverwriteType, Permissions, Ready, Role, RoleId, User, UserId,
+    CommandOptionType, ComponentInteraction, ComponentInteractionDataKind, Context,
+    CreateActionRow, CreateAutocompleteResponse, CreateButton, CreateCommand, CreateCommandOption,
+    CreateInteractionResponse, CreateInteractionResponseMessage, CreateSelectMenu,
+    CreateSelectMenuKind, CreateSelectMenuOption, EditInteractionResponse, EventHandler,
+    GuildChannel, GuildId, GuildMemberUpdateEvent, Http, Interaction, Member, Permissions, Ready,
+    Role, RoleId, User, UserId,
 };
 use serenity::async_trait;
 use tracing::{error, info, warn};
@@ -23,7 +25,10 @@ use crate::store::{Home, TrackedList};
 /// Discord returns at most this many members per request.
 const MEMBER_PAGE: u64 = 1000;
 
-/// Discord shows at most this many autocomplete choices.
+/// Id of the menu that picks the character to remove.
+const UNLINK_MENU: &str = "standings:unlink";
+
+/// Discord shows at most this many autocomplete or menu choices.
 const MAX_CHOICES: usize = 25;
 
 /// Discord drops an autocomplete reply after three seconds.
@@ -104,9 +109,10 @@ impl Handler {
                 _ => self.kick(command).await,
             };
         }
-        // Being able to run a command in the channel proves membership.
-        if command.channel_id != home.channel_id {
-            return Ok(reply.content(format!("Use this in <#{}>.", home.channel_id)));
+        // Commands work anywhere in the server, in case the network channel is
+        // read-only. What counts is that the caller can see that channel.
+        if !self.sees_home(http, home, command).await? {
+            return Ok(reply.content("This is only for members of the standings channel."));
         }
 
         match name {
@@ -230,18 +236,9 @@ impl Handler {
         }
         self.app.sync.notify_one();
 
-        let locked = match lock_channel(http, guild_id, channel_id).await {
-            Ok(()) => {
-                "I made the channel read-only for everyone but me. Roles that explicitly allow Send Messages here can still write."
-            }
-            Err(error) => {
-                warn!("could not lock {channel_id}: {error:#}");
-                "I could not make the channel read-only, because I lack Manage Permissions here. Deny Send Messages for @everyone in the channel settings if you want that."
-            }
-        };
-        Ok(reply.content(format!(
-            "Done. The members of this channel form the network now, and the pinned message shows its state. {locked}"
-        )))
+        Ok(reply.content(
+            "Done. The members of this channel form the network now, and the pinned message shows its state and has the buttons to add characters.",
+        ))
     }
 
     /// The user an admin command is about: given directly, or as the owner of
@@ -309,6 +306,117 @@ impl Handler {
         )))
     }
 
+    /// Whether the caller is in the bot's server and can see the network channel.
+    async fn sees_home(
+        &self,
+        http: &Http,
+        home: Home,
+        command: &CommandInteraction,
+    ) -> Result<bool> {
+        if command.guild_id != Some(home.guild_id) {
+            return Ok(false);
+        }
+        if command.channel_id == home.channel_id {
+            return Ok(true);
+        }
+        let Some(member) = command.member.as_deref() else {
+            return Ok(false);
+        };
+        let guild = home.guild_id.to_partial_guild(http).await?;
+        let Channel::Guild(channel) = home.channel_id.to_channel(http).await? else {
+            return Ok(false);
+        };
+        Ok(guild.user_permissions_in(&channel, member).view_channel())
+    }
+
+    /// Answers a button or menu of the status message. Only people who see
+    /// the channel can press them, so no further membership check is needed.
+    async fn component(&self, http: &Http, component: &ComponentInteraction) -> Result<()> {
+        let user = component.user.id;
+        let message = CreateInteractionResponseMessage::new().ephemeral(true);
+        if self.app.home().map(|home| home.channel_id) != Some(component.channel_id) {
+            let message = message.content("This message is no longer in use.");
+            component
+                .create_response(http, CreateInteractionResponse::Message(message))
+                .await?;
+            return Ok(());
+        }
+
+        let response = match component.data.custom_id.as_str() {
+            status::ADD_BUTTON => {
+                let (text, button) = self.login_prompt(user, LoginScopes::Contacts)?;
+                let row = CreateActionRow::Buttons(vec![button]);
+                CreateInteractionResponse::Message(message.content(text).components(vec![row]))
+            }
+            status::MINE_BUTTON => {
+                let text = self.character_list(user).await?;
+                CreateInteractionResponse::Message(message.content(text))
+            }
+            status::REMOVE_BUTTON => {
+                let characters = self.app.store.characters_of(user).await?;
+                if characters.is_empty() {
+                    CreateInteractionResponse::Message(
+                        message.content("You have no characters linked."),
+                    )
+                } else {
+                    let options = characters
+                        .iter()
+                        .take(MAX_CHOICES)
+                        .map(|c| CreateSelectMenuOption::new(&c.name, &c.name))
+                        .collect();
+                    let menu = CreateSelectMenu::new(
+                        UNLINK_MENU,
+                        CreateSelectMenuKind::String { options },
+                    )
+                    .placeholder("Pick the character to remove");
+                    CreateInteractionResponse::Message(
+                        message
+                            .content("Which character should leave the network?")
+                            .components(vec![CreateActionRow::SelectMenu(menu)]),
+                    )
+                }
+            }
+            UNLINK_MENU => {
+                let picked = match &component.data.kind {
+                    ComponentInteractionDataKind::StringSelect { values } => values.first(),
+                    _ => None,
+                };
+                let name = picked.context("the menu came without a choice")?;
+                let text = if self.app.store.request_unlink(user, name).await? {
+                    self.app.sync.notify_one();
+                    format!(
+                        "Removing {name} from the network. Its contacts get cleaned up in a moment."
+                    )
+                } else {
+                    format!("You have no linked character named {name}.")
+                };
+                CreateInteractionResponse::UpdateMessage(
+                    CreateInteractionResponseMessage::new()
+                        .content(text)
+                        .components(Vec::new()),
+                )
+            }
+            _ => return Ok(()),
+        };
+        component.create_response(http, response).await?;
+        Ok(())
+    }
+
+    /// Opens a login session and returns the text and link button for it.
+    fn login_prompt(
+        &self,
+        user: UserId,
+        scopes: LoginScopes,
+    ) -> Result<(&'static str, CreateButton)> {
+        let state = self.app.begin_login(user, scopes);
+        let url = self.app.login_url(&state, scopes)?;
+        let button = CreateButton::new_link(url).label("Log in with EVE Online");
+        Ok((
+            "Log in with the character you want to add. You can use the same link again for each further character, until it has been unused for 15 minutes.",
+            button,
+        ))
+    }
+
     fn auth(&self, command: &CommandInteraction) -> Result<EditInteractionResponse> {
         let wants_access_lists = option(command, "access_lists")
             .and_then(CommandDataOptionValue::as_bool)
@@ -318,23 +426,21 @@ impl Handler {
         } else {
             LoginScopes::Contacts
         };
-        let state = self.app.begin_login(command.user.id, scopes);
-        let url = self.app.login_url(&state, scopes)?;
-        let button = CreateButton::new_link(url).label("Log in with EVE Online");
+        let (text, button) = self.login_prompt(command.user.id, scopes)?;
         Ok(EditInteractionResponse::new()
-            .content(
-                "Log in with the character you want to add. You can use the same link again for each further character, until it has been unused for 15 minutes.",
-            )
+            .content(text)
             .components(vec![CreateActionRow::Buttons(vec![button])]))
     }
 
     async fn characters(&self, user: UserId) -> Result<EditInteractionResponse> {
+        Ok(EditInteractionResponse::new().content(self.character_list(user).await?))
+    }
+
+    /// The text listing a user's linked characters.
+    async fn character_list(&self, user: UserId) -> Result<String> {
         let characters = self.app.store.characters_of(user).await?;
-        let reply = EditInteractionResponse::new();
         if characters.is_empty() {
-            return Ok(
-                reply.content("You have no characters linked. Use `/standings auth` to add one.")
-            );
+            return Ok("You have no characters linked.".to_owned());
         }
         let names: Vec<String> = characters
             .iter()
@@ -347,7 +453,7 @@ impl Handler {
                 format!("- {}{note}", c.name)
             })
             .collect();
-        Ok(reply.content(truncate(format!("Your characters:\n{}", names.join("\n")))))
+        Ok(truncate(format!("Your characters:\n{}", names.join("\n"))))
     }
 
     async fn unlink(&self, command: &CommandInteraction) -> Result<EditInteractionResponse> {
@@ -467,50 +573,6 @@ fn describe_access(report: Option<&Report>) -> String {
     }
 }
 
-/// Makes the channel read-only for members, so only the bot posts there.
-///
-/// Existing overwrites are kept, which matters for private channels that hide
-/// themselves from everyone.
-async fn lock_channel(http: &Http, guild_id: GuildId, channel_id: ChannelId) -> Result<()> {
-    let Channel::Guild(channel) = channel_id.to_channel(http).await? else {
-        anyhow::bail!("channel {channel_id} is not a server channel");
-    };
-    let existing = |kind: PermissionOverwriteType| {
-        channel
-            .permission_overwrites
-            .iter()
-            .find(|overwrite| overwrite.kind == kind)
-            .map_or((Permissions::empty(), Permissions::empty()), |overwrite| {
-                (overwrite.allow, overwrite.deny)
-            })
-    };
-
-    // The bot first, or the second step would lock it out as well.
-    let bot = PermissionOverwriteType::Member(http.get_current_user().await?.id);
-    let needed = Permissions::VIEW_CHANNEL | Permissions::SEND_MESSAGES;
-    let (allow, deny) = existing(bot);
-    let overwrite = PermissionOverwrite {
-        allow: allow | needed,
-        deny: deny - needed,
-        kind: bot,
-    };
-    channel_id.create_permission(http, overwrite).await?;
-
-    let everyone = PermissionOverwriteType::Role(RoleId::new(guild_id.get()));
-    let writing = Permissions::SEND_MESSAGES
-        | Permissions::SEND_MESSAGES_IN_THREADS
-        | Permissions::CREATE_PUBLIC_THREADS
-        | Permissions::CREATE_PRIVATE_THREADS;
-    let (allow, deny) = existing(everyone);
-    let overwrite = PermissionOverwrite {
-        allow: allow - writing,
-        deny: deny | writing,
-        kind: everyone,
-    };
-    channel_id.create_permission(http, overwrite).await?;
-    Ok(())
-}
-
 #[async_trait]
 impl EventHandler for Handler {
     async fn ready(&self, ctx: Context, ready: Ready) {
@@ -599,6 +661,12 @@ impl EventHandler for Handler {
             Interaction::Command(command) => command,
             Interaction::Autocomplete(command) => {
                 self.autocomplete(&ctx.http, &command).await;
+                return;
+            }
+            Interaction::Component(component) => {
+                if let Err(error) = self.component(&ctx.http, &component).await {
+                    error!("button {} failed: {error:#}", component.data.custom_id);
+                }
                 return;
             }
             _ => return,

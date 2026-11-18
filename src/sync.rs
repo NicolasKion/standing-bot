@@ -350,7 +350,7 @@ impl Syncer {
     /// Pings the owner in the channel so they can log the character in again.
     async fn alert_login_lost(&self, character: &Character) {
         let message = format!(
-            "<@{}> the EVE login for **{}** stopped working, so it was removed from the standings network. Use `/standings auth` to add it again.",
+            "<@{}> the EVE login for **{}** stopped working, so it was removed from the standings network. Use the Add character button on the pinned message to add it again.",
             character.discord_user_id, character.name
         );
         let Some(home) = self.app.home() else {

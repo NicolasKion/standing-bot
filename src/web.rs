@@ -49,7 +49,7 @@ async fn callback(
                 StatusCode::BAD_REQUEST,
                 page(
                     &format!(
-                        "That did not work: {error}. Run /standings auth in Discord to try again."
+                        "That did not work: {error}. Use the Add character button in Discord to try again."
                     ),
                     None,
                 ),

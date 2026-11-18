@@ -9,9 +9,11 @@ A Discord bot for EVE Online groups. Everyone who can see one Discord channel li
 
 ## Commands
 
-All of them answer privately. The `/standings` commands only work in the network channel, the `/standings-admin` commands work in any channel of the server and only for members who can manage it.
+Members use the buttons under the pinned message in the network channel: Add character, My characters and Remove character.
 
-- `/standings-admin setup` makes the channel you run it in the network channel, makes it read-only for everyone but the bot, and pins a status message there. Running it in another channel moves the network there.
+The slash commands do the same and more. They answer privately and work in any channel of the server, which matters if you make the network channel read-only: `/standings` for everyone who can see the network channel, `/standings-admin` for members who can manage the server.
+
+- `/standings-admin setup` makes the channel you run it in the network channel and pins a status message with the buttons there. It does not change the channel's permissions. Running it in another channel moves the network there.
 - `/standings auth` gives you a login link. The same link works for each further character, and the page after a login has a button for the next one.
 - `/standings characters` lists your linked characters.
 - `/standings unlink character:<name>` removes one of them. The name autocompletes from your characters.
@@ -36,7 +38,7 @@ A character counts as on the list if it, its corporation or its alliance has an 
 
 1. Create an application at https://discord.com/developers/applications and add a bot to it.
 2. Under Bot, turn on Server Members Intent and copy the token.
-3. Invite it with the scopes `bot` and `applications.commands` and the permissions View Channels, Send Messages, Pin Messages and Manage Roles. Manage Roles is only used to make the channel read-only during setup. Leave it out if you would rather do that by hand.
+3. Invite it with the scopes `bot` and `applications.commands` and the permissions View Channels, Send Messages and Pin Messages.
 4. Turn off Public Bot there if you do not want others to invite your instance. One instance serves one server.
 
 ### 2. EVE application
