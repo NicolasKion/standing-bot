@@ -16,8 +16,7 @@ use serenity::async_trait;
 use tracing::{error, info, warn};
 
 use crate::access::Report;
-use crate::app::App;
-use crate::sso::ACCESS_LIST_SCOPE;
+use crate::app::{App, LoginScopes};
 use crate::status::{self, truncate};
 use crate::store::{Home, TrackedList};
 
@@ -314,18 +313,17 @@ impl Handler {
         let wants_access_lists = option(command, "access_lists")
             .and_then(CommandDataOptionValue::as_bool)
             .unwrap_or(false);
-        let extra_scopes: &[&str] = if wants_access_lists {
-            &[ACCESS_LIST_SCOPE]
+        let scopes = if wants_access_lists {
+            LoginScopes::ContactsAndAccessLists
         } else {
-            &[]
+            LoginScopes::Contacts
         };
-
-        let state = self.app.begin_login(command.user.id);
-        let url = self.app.sso.authorize_url(&state, extra_scopes)?;
+        let state = self.app.begin_login(command.user.id, scopes);
+        let url = self.app.login_url(&state, scopes)?;
         let button = CreateButton::new_link(url).label("Log in with EVE Online");
         Ok(EditInteractionResponse::new()
             .content(
-                "Log in with the character you want to add. Run `/standings auth` again for each further character. The link works for 15 minutes.",
+                "Log in with the character you want to add. You can use the same link again for each further character, until it has been unused for 15 minutes.",
             )
             .components(vec![CreateActionRow::Buttons(vec![button])]))
     }

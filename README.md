@@ -12,7 +12,7 @@ A Discord bot for EVE Online groups. Everyone who can see one Discord channel li
 All of them answer privately. The `/standings` commands only work in the network channel, the `/standings-admin` commands work in any channel of the server and only for members who can manage it.
 
 - `/standings-admin setup` makes the channel you run it in the network channel, makes it read-only for everyone but the bot, and pins a status message there. Running it in another channel moves the network there.
-- `/standings auth` gives you a login link for one character. Run it again for each further character.
+- `/standings auth` gives you a login link. The same link works for each further character, and the page after a login has a button for the next one.
 - `/standings characters` lists your linked characters.
 - `/standings unlink character:<name>` removes one of them. The name autocompletes from your characters.
 - `/standings-admin whois user:<user>` or `/standings-admin whois character:<name>` shows all characters of a user, found directly or through any one of their characters.

@@ -11,7 +11,7 @@ use tracing::warn;
 use crate::access::Report;
 use crate::config::Config;
 use crate::esi::Esi;
-use crate::sso::{RefreshError, Sso};
+use crate::sso::{ACCESS_LIST_SCOPE, RefreshError, Sso};
 use crate::store::{Character, Home, Store};
 
 /// How many access lists of one character are looked at.
@@ -20,9 +20,17 @@ const MAX_LISTS_PER_CHARACTER: usize = 25;
 /// How long a login link from `/standings auth` stays usable.
 const LOGIN_TTL: Duration = Duration::from_secs(15 * 60);
 
+/// What a login asks the player to grant.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LoginScopes {
+    Contacts,
+    ContactsAndAccessLists,
+}
+
 struct PendingLogin {
     user: UserId,
-    created: Instant,
+    scopes: LoginScopes,
+    last_used: Instant,
 }
 
 pub struct App {
@@ -114,29 +122,43 @@ impl App {
             .unwrap_or_default()
     }
 
-    /// Starts a login for a Discord user and returns the OAuth `state` for it.
-    pub fn begin_login(&self, user: UserId) -> String {
+    /// Opens a login session for a Discord user and returns the OAuth `state`
+    /// for it. The session can link any number of characters.
+    pub fn begin_login(&self, user: UserId, scopes: LoginScopes) -> String {
         let state = format!("{:032x}", rand::random::<u128>());
         let mut logins = self.logins.lock().expect("login map lock poisoned");
-        logins.retain(|_, login| login.created.elapsed() < LOGIN_TTL);
+        logins.retain(|_, login| login.last_used.elapsed() < LOGIN_TTL);
         logins.insert(
             state.clone(),
             PendingLogin {
                 user,
-                created: Instant::now(),
+                scopes,
+                last_used: Instant::now(),
             },
         );
         state
     }
 
-    /// Ends a login and returns who started it, if the state is known and fresh.
-    pub fn finish_login(&self, state: &str) -> Option<UserId> {
-        let login = self
-            .logins
-            .lock()
-            .expect("login map lock poisoned")
-            .remove(state)?;
-        (login.created.elapsed() < LOGIN_TTL).then_some(login.user)
+    /// Who a login session belongs to and which scopes it asks for, if the
+    /// state is known and fresh. Using a session keeps it alive.
+    pub fn login(&self, state: &str) -> Option<(UserId, LoginScopes)> {
+        let mut logins = self.logins.lock().expect("login map lock poisoned");
+        let login = logins.get_mut(state)?;
+        if login.last_used.elapsed() >= LOGIN_TTL {
+            logins.remove(state);
+            return None;
+        }
+        login.last_used = Instant::now();
+        Some((login.user, login.scopes))
+    }
+
+    /// The EVE login URL of a session.
+    pub fn login_url(&self, state: &str, scopes: LoginScopes) -> anyhow::Result<reqwest::Url> {
+        let extra: &[&str] = match scopes {
+            LoginScopes::Contacts => &[],
+            LoginScopes::ContactsAndAccessLists => &[ACCESS_LIST_SCOPE],
+        };
+        self.sso.authorize_url(state, extra)
     }
 
     /// Gets an ESI access token for a character and keeps a rotated refresh token.
