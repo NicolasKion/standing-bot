@@ -79,20 +79,24 @@ pub fn access_section(report: Option<&Report>) -> String {
             by_owner
                 .entry(entry.owner)
                 .or_default()
-                .push(format!("{}{note}", entry.name));
+                .push(format!("`{}`{note}", entry.name));
         }
         text.push_str(&format!("\nAdd to the list ({}):", missing.len()));
         for (owner, names) in &by_owner {
-            text.push_str(&format!("\n- {} (<@{owner}>)", names.join(", ")));
+            text.push_str(&format!("\n- <@{owner}>: {}", names.join(", ")));
         }
     }
     if !extra.is_empty() {
         text.push_str(&format!("\nRemove from the list ({}):", extra.len()));
-        for name in extra {
-            text.push_str(&format!("\n- {name}"));
-        }
+        text.push_str(&code_block(extra.iter().cloned()));
     }
-    text
+    text.trim_end().to_owned()
+}
+
+/// One name per line in a code block, so the list is easy to read and copy.
+fn code_block(lines: impl Iterator<Item = String>) -> String {
+    let lines: Vec<String> = lines.collect();
+    format!("\n```\n{}\n```\n", lines.join("\n"))
 }
 
 /// Writes the text into the pinned message, creating and pinning it if it is
@@ -159,6 +163,10 @@ pub fn truncate(mut content: String) -> String {
             end -= 1;
         }
         content.truncate(end);
+        // Close a code block the cut left open.
+        if content.matches("```").count() % 2 == 1 {
+            content.push_str("\n```");
+        }
         content.push_str("\n...");
     }
     content
@@ -198,7 +206,7 @@ mod tests {
         let missing = vec![outstanding("Alpha", 7), outstanding("Beta", 7)];
         let text = access_section(Some(&report(missing, Vec::new())));
         assert!(
-            text.contains("Add to the list (2):\n- Alpha, Beta (<@7>)"),
+            text.contains("Add to the list (2):\n- <@7>: `Alpha`, `Beta`"),
             "{text}"
         );
         assert!(!text.contains("Remove from the list"), "{text}");
@@ -208,7 +216,7 @@ mod tests {
     fn extra_characters_are_listed_for_removal() {
         let text = access_section(Some(&report(Vec::new(), vec!["Gamma".to_owned()])));
         assert!(
-            text.contains("Remove from the list (1):\n- Gamma"),
+            text.contains("Remove from the list (1):\n```\nGamma\n```"),
             "{text}"
         );
     }
@@ -230,5 +238,11 @@ mod tests {
         let text = truncate("ä".repeat(3000));
         assert!(text.len() <= MESSAGE_LIMIT + 4, "{}", text.len());
         assert!(text.ends_with("..."));
+    }
+
+    #[test]
+    fn cut_inside_a_code_block_closes_it() {
+        let text = truncate(format!("```\n{}", "a\n".repeat(1500)));
+        assert!(text.ends_with("```\n..."), "{text}");
     }
 }
