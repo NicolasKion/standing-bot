@@ -19,6 +19,7 @@ The slash commands do the same and more. They answer privately and work in any c
 - `/standings unlink character:<name>` removes one of them. The name autocompletes from your characters.
 - `/standings-admin whois user:<user>` or `/standings-admin whois character:<name>` shows all characters of a user, found directly or through any one of their characters.
 - `/standings-admin add user:<user> character:<name>` adds a character by its exact name for a member who cannot log in with it. The rest of the network sets it blue, but the bot cannot set contacts on that character, so its owner has to do that side by hand. A normal login later replaces it.
+- `/standings-admin blue name:<name>` makes every character in the network set a corporation or alliance blue, by its exact name. If a corporation and an alliance share the name, the alliance is used. `/standings-admin blue` without a name lists them, and `/standings-admin unblue name:<name>` removes one again. This only works one way: they have to set you blue themselves.
 - `/standings-admin kick character:<name>` removes one character and `/standings-admin kick user:<user>` removes all of a user's characters. The owner can link them again with `/standings auth`, so to keep someone out, take away their access to the channel.
 - `/standings access` shows which characters of the network are not on the tracked access list yet.
 - `/standings access-list` shows the access lists your characters manage, and `/standings access-list name:<name>` picks the one to track.

@@ -9,6 +9,7 @@ use reqwest::{Client, Method, RequestBuilder, Response};
 use serde::Deserialize;
 
 use crate::access::{AccessList, Affiliation};
+use crate::store::{BlueContact, BlueKind};
 
 const BASE_URL: &str = "https://esi.evetech.net";
 
@@ -62,6 +63,10 @@ struct Name {
 struct Ids {
     #[serde(default)]
     characters: Vec<Name>,
+    #[serde(default)]
+    corporations: Vec<Name>,
+    #[serde(default)]
+    alliances: Vec<Name>,
 }
 
 #[derive(Deserialize)]
@@ -210,6 +215,29 @@ impl Esi {
             .into_iter()
             .next()
             .map(|found| (found.id, found.name)))
+    }
+
+    /// Finds a corporation or alliance by its exact name. When both carry the
+    /// name, the alliance wins, since setting it blue covers its corporations.
+    /// Public, needs no token.
+    pub async fn group_by_name(&self, name: &str) -> Result<Option<BlueContact>, EsiError> {
+        let request = self.request(Method::POST, "/universe/ids").json(&[name]);
+        let ids: Ids = send(request).await?.json().await?;
+        let alliance = ids
+            .alliances
+            .into_iter()
+            .next()
+            .map(|found| (found, BlueKind::Alliance));
+        let corporation = ids
+            .corporations
+            .into_iter()
+            .next()
+            .map(|found| (found, BlueKind::Corporation));
+        Ok(alliance.or(corporation).map(|(found, kind)| BlueContact {
+            contact_id: found.id,
+            name: found.name,
+            kind,
+        }))
     }
 
     async fn write_contacts(

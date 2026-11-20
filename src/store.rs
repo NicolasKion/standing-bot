@@ -27,6 +27,11 @@ CREATE TABLE IF NOT EXISTS managed_contacts (
     previous_standing REAL,
     PRIMARY KEY (character_id, contact_id)
 );
+CREATE TABLE IF NOT EXISTS blue_contacts (
+    contact_id INTEGER PRIMARY KEY,
+    name       TEXT    NOT NULL,
+    kind       TEXT    NOT NULL
+);
 ";
 
 pub struct Character {
@@ -81,6 +86,38 @@ impl Character {
 pub struct ManagedContact {
     pub contact_id: i64,
     pub previous_standing: Option<f64>,
+}
+
+/// What kind of entity a blue contact is.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BlueKind {
+    Corporation,
+    Alliance,
+}
+
+impl BlueKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Corporation => "corporation",
+            Self::Alliance => "alliance",
+        }
+    }
+
+    fn parse(text: &str) -> Result<Self> {
+        match text {
+            "corporation" => Ok(Self::Corporation),
+            "alliance" => Ok(Self::Alliance),
+            other => anyhow::bail!("unknown blue contact kind {other}"),
+        }
+    }
+}
+
+/// A corporation or alliance every network character sets blue, added by an admin.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlueContact {
+    pub contact_id: i64,
+    pub name: String,
+    pub kind: BlueKind,
 }
 
 /// Whether a login lets the bot read the character's access lists.
@@ -356,5 +393,43 @@ impl Store {
         }
         tx.commit().await?;
         Ok(())
+    }
+
+    pub async fn blue_contacts(&self) -> Result<Vec<BlueContact>> {
+        let rows = sqlx::query("SELECT * FROM blue_contacts ORDER BY name")
+            .fetch_all(&self.pool)
+            .await?;
+        rows.iter()
+            .map(|row| {
+                let kind: String = row.try_get("kind")?;
+                Ok(BlueContact {
+                    contact_id: row.try_get("contact_id")?,
+                    name: row.try_get("name")?,
+                    kind: BlueKind::parse(&kind)?,
+                })
+            })
+            .collect()
+    }
+
+    /// Returns false if the contact is already on the list.
+    pub async fn add_blue(&self, contact: &BlueContact) -> Result<bool> {
+        let result = sqlx::query(
+            "INSERT OR IGNORE INTO blue_contacts (contact_id, name, kind) VALUES (?, ?, ?)",
+        )
+        .bind(contact.contact_id)
+        .bind(&contact.name)
+        .bind(contact.kind.as_str())
+        .execute(&self.pool)
+        .await?;
+        Ok(result.rows_affected() > 0)
+    }
+
+    /// Returns false if no blue contact has that name.
+    pub async fn remove_blue(&self, name: &str) -> Result<bool> {
+        let result = sqlx::query("DELETE FROM blue_contacts WHERE name = ? COLLATE NOCASE")
+            .bind(name.trim())
+            .execute(&self.pool)
+            .await?;
+        Ok(result.rows_affected() > 0)
     }
 }

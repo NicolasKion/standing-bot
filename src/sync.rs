@@ -2,8 +2,8 @@
 //!
 //! The network is every linked character whose owner can see the configured
 //! channel. Each of them gets every other one as a contact with the configured
-//! standing. Characters that drop out lose those contacts again, and the others
-//! lose them.
+//! standing, plus the corporations and alliances an admin added. Characters
+//! that drop out lose those contacts again, and the others lose them.
 
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
@@ -113,6 +113,7 @@ impl Syncer {
         let members =
             discord::channel_members(&self.discord, home.guild_id, home.channel_id).await?;
         let characters = self.app.store.characters().await?;
+        let blues = self.app.store.blue_contacts().await?;
 
         let network: HashSet<i64> = characters
             .iter()
@@ -126,6 +127,7 @@ impl Syncer {
             if network.contains(&id) {
                 desired.clone_from(&network);
                 desired.remove(&id);
+                desired.extend(blues.iter().map(|blue| blue.contact_id));
             }
 
             match self.sync_character(character, &desired, mode).await {
@@ -169,7 +171,7 @@ impl Syncer {
             members: owners.len(),
             characters: in_network.len(),
         };
-        let text = status::render(summary, self.app.access_report().as_ref());
+        let text = status::render(summary, &blues, self.app.access_report().as_ref());
         // The timed pass always writes, which also brings back a deleted message.
         if mode == Mode::Verify || self.published.as_deref() != Some(text.as_str()) {
             status::publish(&self.app, &self.discord, &text).await?;

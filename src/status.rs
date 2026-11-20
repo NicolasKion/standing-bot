@@ -11,6 +11,7 @@ use tracing::warn;
 
 use crate::access::{Outcome, Report};
 use crate::app::App;
+use crate::store::BlueContact;
 
 /// Ids of the buttons under the status message.
 pub const ADD_BUTTON: &str = "standings:add";
@@ -28,13 +29,26 @@ pub struct Summary {
 }
 
 /// The full text of the pinned message.
-pub fn render(summary: Summary, report: Option<&Report>) -> String {
+pub fn render(summary: Summary, blues: &[BlueContact], report: Option<&Report>) -> String {
     truncate(format!(
-        "**Standings network**\n{} characters of {} members set each other to blue. Use the buttons below to add or remove yours.\n\n{}",
+        "**Standings network**\n{} characters of {} members set each other to blue. Use the buttons below to add or remove yours.\n{}\n{}",
         summary.characters,
         summary.members,
+        blue_section(blues),
         access_section(report)
     ))
+}
+
+/// The corporations and alliances the network also sets blue.
+pub fn blue_section(blues: &[BlueContact]) -> String {
+    if blues.is_empty() {
+        return String::new();
+    }
+    let names: Vec<String> = blues
+        .iter()
+        .map(|blue| format!("{} ({})", blue.name, blue.kind.as_str()))
+        .collect();
+    format!("Also set blue: {}.\n", names.join(", "))
 }
 
 /// What has to change on the tracked access list.
@@ -197,6 +211,18 @@ mod tests {
             text.contains("Remove from the list (1):\n- Gamma"),
             "{text}"
         );
+    }
+
+    #[test]
+    fn blue_contacts_are_listed() {
+        use crate::store::BlueKind;
+        let blues = vec![BlueContact {
+            contact_id: 99_000_001,
+            name: "Friends".to_owned(),
+            kind: BlueKind::Alliance,
+        }];
+        assert_eq!(blue_section(&blues), "Also set blue: Friends (alliance).\n");
+        assert_eq!(blue_section(&[]), "");
     }
 
     #[test]

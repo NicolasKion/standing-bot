@@ -100,13 +100,15 @@ impl Handler {
             ));
         };
         // Admin commands work in any channel of the server.
-        if matches!(name, "whois" | "kick" | "add") {
+        if matches!(name, "whois" | "kick" | "add" | "blue" | "unblue") {
             if command.guild_id != Some(home.guild_id) || !may_manage(command) {
                 return Ok(reply.content("Only members who can manage the server can run this."));
             }
             return match name {
                 "whois" => self.whois(command).await,
                 "add" => self.add_manual(command).await,
+                "blue" => self.blue(command).await,
+                "unblue" => self.unblue(command).await,
                 _ => self.kick(command).await,
             };
         }
@@ -144,6 +146,13 @@ impl Handler {
                 }
             },
             "access-list" => self.list_names(user).await,
+            "unblue" if may_manage(command) => match self.app.store.blue_contacts().await {
+                Ok(blues) => blues.into_iter().map(|blue| blue.name).collect(),
+                Err(error) => {
+                    warn!("could not load blue contacts for autocomplete: {error:#}");
+                    Vec::new()
+                }
+            },
             "whois" | "kick" if may_manage(command) => match self.app.store.characters().await {
                 Ok(characters) => characters.into_iter().map(|c| c.name).collect(),
                 Err(error) => {
@@ -309,6 +318,58 @@ impl Handler {
         info!("{} added {name} by hand for {user}", command.user.id);
         Ok(reply.content(format!(
             "Added {name} for <@{user}>. Everyone in the network sets it blue. I cannot set contacts on {name} itself, so its owner has to set the others blue by hand. A normal login later replaces this."
+        )))
+    }
+
+    /// Lists the extra blue contacts, or adds a corporation or alliance to them.
+    async fn blue(&self, command: &CommandInteraction) -> Result<EditInteractionResponse> {
+        let reply = EditInteractionResponse::new();
+        let Some(name) = option(command, "name").and_then(CommandDataOptionValue::as_str) else {
+            let blues = self.app.store.blue_contacts().await?;
+            if blues.is_empty() {
+                return Ok(reply.content(
+                    "The network sets no corporation or alliance blue yet. Add one with `/standings-admin blue name:<name>`.",
+                ));
+            }
+            let names: Vec<String> = blues
+                .iter()
+                .map(|blue| format!("- {} ({})", blue.name, blue.kind.as_str()))
+                .collect();
+            return Ok(reply.content(truncate(format!(
+                "Everyone in the network also sets these blue:\n{}",
+                names.join("\n")
+            ))));
+        };
+
+        let Some(blue) = self.app.esi.group_by_name(name.trim()).await? else {
+            return Ok(reply.content(format!(
+                "EVE knows no corporation or alliance named {name}. The name has to match exactly."
+            )));
+        };
+        if !self.app.store.add_blue(&blue).await? {
+            return Ok(reply.content(format!("{} is already set blue.", blue.name)));
+        }
+        self.app.sync.notify_one();
+        info!("{} set {} blue", command.user.id, blue.name);
+        Ok(reply.content(format!(
+            "Everyone in the network sets the {} {} blue now. They have to set you blue on their side themselves.",
+            blue.kind.as_str(),
+            blue.name
+        )))
+    }
+
+    async fn unblue(&self, command: &CommandInteraction) -> Result<EditInteractionResponse> {
+        let name = option(command, "name")
+            .and_then(CommandDataOptionValue::as_str)
+            .context("the unblue command came without a name")?;
+        let reply = EditInteractionResponse::new();
+        if !self.app.store.remove_blue(name).await? {
+            return Ok(reply.content(format!("{name} is not on the blue list.")));
+        }
+        self.app.sync.notify_one();
+        info!("{} removed {name} from the blue list", command.user.id);
+        Ok(reply.content(format!(
+            "Removing {name} from everyone's contacts. Characters that had it before keep their old standing."
         )))
     }
 
@@ -694,6 +755,29 @@ impl EventHandler for Handler {
                         )
                         .required(true),
                     ),
+                )
+                .add_option(
+                    sub(
+                        "blue",
+                        "Set a corporation or alliance blue for everyone, or list the ones that are",
+                    )
+                    .add_sub_option(CreateCommandOption::new(
+                        CommandOptionType::String,
+                        "name",
+                        "Exact name of the corporation or alliance",
+                    )),
+                )
+                .add_option(
+                    sub("unblue", "Stop setting a corporation or alliance blue")
+                        .add_sub_option(
+                            CreateCommandOption::new(
+                                CommandOptionType::String,
+                                "name",
+                                "Name of the corporation or alliance",
+                            )
+                            .required(true)
+                            .set_autocomplete(true),
+                        ),
                 )
                 .add_option(
                     sub(
