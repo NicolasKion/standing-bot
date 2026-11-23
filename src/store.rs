@@ -280,7 +280,7 @@ impl Store {
         let rows = sqlx::query(
             "SELECT * FROM characters
              WHERE discord_user_id = ? AND unlink_requested = 0
-             ORDER BY name",
+             ORDER BY name COLLATE NOCASE",
         )
         .bind(owner.get().cast_signed())
         .fetch_all(&self.pool)
@@ -396,7 +396,7 @@ impl Store {
     }
 
     pub async fn blue_contacts(&self) -> Result<Vec<BlueContact>> {
-        let rows = sqlx::query("SELECT * FROM blue_contacts ORDER BY name")
+        let rows = sqlx::query("SELECT * FROM blue_contacts ORDER BY name COLLATE NOCASE")
             .fetch_all(&self.pool)
             .await?;
         rows.iter()

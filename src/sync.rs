@@ -213,7 +213,7 @@ impl Syncer {
                 });
             }
         }
-        outstanding.sort_by(|a, b| a.name.cmp(&b.name));
+        outstanding.sort_by_cached_key(|entry| entry.name.to_lowercase());
 
         let network_ids: HashSet<i64> = ids.iter().copied().collect();
         let extra_ids = list.membership.extra_characters(&network_ids);
@@ -233,7 +233,7 @@ impl Syncer {
                     .unwrap_or_else(|| format!("character {id}"))
             })
             .collect();
-        extra.sort();
+        extra.sort_by_cached_key(|name| name.to_lowercase());
 
         self.app.set_access_report(Some(Report {
             list_name: list.name,
