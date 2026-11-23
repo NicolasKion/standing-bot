@@ -81,13 +81,13 @@ pub fn access_section(report: Option<&Report>) -> String {
                 .or_default()
                 .push(format!("`{}`{note}", entry.name));
         }
-        text.push_str(&format!("\nAdd to the list ({}):", missing.len()));
+        text.push_str(&format!("\nAdd to the ACL ({}):", missing.len()));
         for (owner, names) in &by_owner {
             text.push_str(&format!("\n- <@{owner}>: {}", names.join(", ")));
         }
     }
     if !extra.is_empty() {
-        text.push_str(&format!("\nRemove from the list ({}):", extra.len()));
+        text.push_str(&format!("\nNot linked, remove from the ACL ({}):", extra.len()));
         text.push_str(&code_block(extra.iter().cloned()));
     }
     text.trim_end().to_owned()
@@ -206,17 +206,17 @@ mod tests {
         let missing = vec![outstanding("Alpha", 7), outstanding("Beta", 7)];
         let text = access_section(Some(&report(missing, Vec::new())));
         assert!(
-            text.contains("Add to the list (2):\n- <@7>: `Alpha`, `Beta`"),
+            text.contains("Add to the ACL (2):\n- <@7>: `Alpha`, `Beta`"),
             "{text}"
         );
-        assert!(!text.contains("Remove from the list"), "{text}");
+        assert!(!text.contains("remove from the ACL"), "{text}");
     }
 
     #[test]
     fn extra_characters_are_listed_for_removal() {
         let text = access_section(Some(&report(Vec::new(), vec!["Gamma".to_owned()])));
         assert!(
-            text.contains("Remove from the list (1):\n```\nGamma\n```"),
+            text.contains("Not linked, remove from the ACL (1):\n```\nGamma\n```"),
             "{text}"
         );
     }
