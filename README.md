@@ -32,7 +32,7 @@ The bot can check the network against one in-game access list, for example the o
 2. The same person runs `/standings access-list` to see the lists and `/standings access-list name:<name>` to pick one.
 3. From then on the pinned status message and `/standings access` show what has to change on the list: characters of the network that are missing, grouped by Discord account, and characters that are on the list by name but not in the network.
 
-A character counts as on the list if it, its corporation or its alliance has an entry. The most specific entry wins, so a blocked character stays blocked even if its alliance is allowed.
+A character counts as on the list only if it has an entry of its own. One that gets in through its corporation or alliance loses access the moment it leaves, so it is reported as missing, marked "corp only" or "alliance only". A blocked character, corporation or alliance is marked "blocked".
 
 ## Setup
 

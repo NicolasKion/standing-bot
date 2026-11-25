@@ -9,7 +9,7 @@ use serenity::all::{
 };
 use tracing::warn;
 
-use crate::access::{Outcome, Report};
+use crate::access::{Group, Outcome, Report, Verdict};
 use crate::app::App;
 use crate::store::BlueContact;
 
@@ -67,7 +67,7 @@ pub fn access_section(report: Option<&Report>) -> String {
     };
     if missing.is_empty() && extra.is_empty() {
         return format!(
-            "**Access list {list}**\nEveryone in the network is on it, and nobody else is."
+            "**Access list {list}**\nEvery character in the network is on it by name, and nobody else is."
         );
     }
 
@@ -75,7 +75,12 @@ pub fn access_section(report: Option<&Report>) -> String {
     if !missing.is_empty() {
         let mut by_owner: BTreeMap<UserId, Vec<String>> = BTreeMap::new();
         for entry in missing {
-            let note = if entry.blocked { " (blocked)" } else { "" };
+            let note = match entry.verdict {
+                Verdict::Blocked => " (blocked)",
+                Verdict::Inherited(Group::Corporation) => " (corp only)",
+                Verdict::Inherited(Group::Alliance) => " (alliance only)",
+                Verdict::Allowed | Verdict::NotListed => "",
+            };
             by_owner
                 .entry(entry.owner)
                 .or_default()
@@ -87,7 +92,10 @@ pub fn access_section(report: Option<&Report>) -> String {
         }
     }
     if !extra.is_empty() {
-        text.push_str(&format!("\nNot linked, remove from the ACL ({}):", extra.len()));
+        text.push_str(&format!(
+            "\nNot linked, remove from the ACL ({}):",
+            extra.len()
+        ));
         text.push_str(&code_block(extra.iter().cloned()));
     }
     text.trim_end().to_owned()
@@ -191,14 +199,17 @@ mod tests {
         Outstanding {
             name: name.to_owned(),
             owner: UserId::new(owner),
-            blocked: false,
+            verdict: Verdict::NotListed,
         }
     }
 
     #[test]
     fn clean_list_says_so() {
         let text = access_section(Some(&report(Vec::new(), Vec::new())));
-        assert!(text.contains("Everyone in the network is on it"), "{text}");
+        assert!(
+            text.contains("Every character in the network is on it by name"),
+            "{text}"
+        );
     }
 
     #[test]
@@ -210,6 +221,14 @@ mod tests {
             "{text}"
         );
         assert!(!text.contains("remove from the ACL"), "{text}");
+    }
+
+    #[test]
+    fn characters_on_the_list_through_their_corporation_are_marked() {
+        let mut alpha = outstanding("Alpha", 7);
+        alpha.verdict = Verdict::Inherited(Group::Corporation);
+        let text = access_section(Some(&report(vec![alpha], Vec::new())));
+        assert!(text.contains("- <@7>: `Alpha` (corp only)"), "{text}");
     }
 
     #[test]

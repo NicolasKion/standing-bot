@@ -209,7 +209,7 @@ impl Syncer {
                 outstanding.push(Outstanding {
                     name: character.name.clone(),
                     owner: character.discord_user_id,
-                    blocked: verdict == Verdict::Blocked,
+                    verdict,
                 });
             }
         }
