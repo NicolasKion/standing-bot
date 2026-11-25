@@ -1,11 +1,9 @@
 //! The pinned message in the network channel that shows the current state.
 
-use std::collections::BTreeMap;
-
 use anyhow::{Context, Result};
 use serenity::all::{
     ButtonStyle, CreateActionRow, CreateAllowedMentions, CreateButton, CreateMessage, EditMessage,
-    Http, HttpError, MessageId, StatusCode, UserId,
+    Http, HttpError, MessageId, StatusCode,
 };
 use tracing::warn;
 
@@ -73,22 +71,18 @@ pub fn access_section(report: Option<&Report>) -> String {
 
     let mut text = format!("**Access list {list}**");
     if !missing.is_empty() {
-        let mut by_owner: BTreeMap<UserId, Vec<String>> = BTreeMap::new();
-        for entry in missing {
+        // Sorted by name, the way the list reads in game.
+        let mut sorted: Vec<_> = missing.iter().collect();
+        sorted.sort_by_cached_key(|entry| entry.name.to_lowercase());
+        text.push_str(&format!("\nAdd to the ACL ({}):", missing.len()));
+        for entry in sorted {
             let note = match entry.verdict {
-                Verdict::Blocked => " (blocked)",
-                Verdict::Inherited(Group::Corporation) => " (corp only)",
-                Verdict::Inherited(Group::Alliance) => " (alliance only)",
+                Verdict::Blocked => ", blocked",
+                Verdict::Inherited(Group::Corporation) => ", corp only",
+                Verdict::Inherited(Group::Alliance) => ", alliance only",
                 Verdict::Allowed | Verdict::NotListed => "",
             };
-            by_owner
-                .entry(entry.owner)
-                .or_default()
-                .push(format!("`{}`{note}", entry.name));
-        }
-        text.push_str(&format!("\nAdd to the ACL ({}):", missing.len()));
-        for (owner, names) in &by_owner {
-            text.push_str(&format!("\n- <@{owner}>: {}", names.join(", ")));
+            text.push_str(&format!("\n- `{}` (<@{}>{note})", entry.name, entry.owner));
         }
     }
     if !extra.is_empty() {
@@ -184,6 +178,8 @@ pub fn truncate(mut content: String) -> String {
 mod tests {
     use std::time::SystemTime;
 
+    use serenity::all::UserId;
+
     use super::*;
     use crate::access::Outstanding;
 
@@ -213,11 +209,17 @@ mod tests {
     }
 
     #[test]
-    fn missing_characters_are_grouped_by_owner() {
-        let missing = vec![outstanding("Alpha", 7), outstanding("Beta", 7)];
+    fn missing_characters_are_sorted_by_name_with_their_owner() {
+        let missing = vec![
+            outstanding("beta", 7),
+            outstanding("Gamma", 7),
+            outstanding("Alpha", 9),
+        ];
         let text = access_section(Some(&report(missing, Vec::new())));
         assert!(
-            text.contains("Add to the ACL (2):\n- <@7>: `Alpha`, `Beta`"),
+            text.contains(
+                "Add to the ACL (3):\n- `Alpha` (<@9>)\n- `beta` (<@7>)\n- `Gamma` (<@7>)"
+            ),
             "{text}"
         );
         assert!(!text.contains("remove from the ACL"), "{text}");
@@ -228,7 +230,7 @@ mod tests {
         let mut alpha = outstanding("Alpha", 7);
         alpha.verdict = Verdict::Inherited(Group::Corporation);
         let text = access_section(Some(&report(vec![alpha], Vec::new())));
-        assert!(text.contains("- <@7>: `Alpha` (corp only)"), "{text}");
+        assert!(text.contains("- `Alpha` (<@7>, corp only)"), "{text}");
     }
 
     #[test]
